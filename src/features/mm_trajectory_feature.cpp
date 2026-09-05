@@ -22,11 +22,44 @@ int64_t MMTrajectoryFeature::get_dimension_count() const {
 }
 
 void MMTrajectoryFeature::setup_skeleton(const MMCharacter* p_character, const AnimationMixer* p_player, const Skeleton3D* p_skeleton) {
-    const StringName skel_path = p_player->get_root_motion_track().get_concatenated_names();
-    const StringName root_bone_name = p_player->get_root_motion_track().get_concatenated_subnames();
-    _root_bone = p_skeleton->find_bone(root_bone_name);
+    // The plugin needs a root bone to sample the trajectory. When no root motion track is
+    // configured the NodePath is empty (get_concatenated_names/subnames throw "data is
+    // null" and find_bone returns -1). Defend: fall back to "Hips" / root bone so the
+    // trajectory feature produces deterministic, valid data without a root motion track.
+    NodePath root_track = p_player->get_root_motion_track();
+    bool has_root_track = !root_track.is_empty() && root_track != NodePath(".") && root_track != NodePath("..");
+    StringName skel_path;
+    StringName root_bone_name;
+    if (has_root_track) {
+        skel_path = root_track.get_concatenated_names();
+        root_bone_name = root_track.get_concatenated_subnames();
+        _root_bone = p_skeleton->find_bone(root_bone_name);
+    } else {
+        skel_path = StringName();
+        _root_bone = p_skeleton->find_bone("Hips");
+        if (_root_bone < 0) {
+            for (int32_t i = 0; i < p_skeleton->get_bone_count(); ++i) {
+                if (p_skeleton->get_bone_parent(i) < 0) {
+                    _root_bone = i;
+                    break;
+                }
+            }
+            if (_root_bone < 0) {
+                _root_bone = 0;
+            }
+        }
+        root_bone_name = p_skeleton->get_bone_name(_root_bone);
+    }
+    if (_root_bone < 0) {
+        _root_bone = 0;
+        if (p_skeleton->get_bone_count() > 0) {
+            root_bone_name = p_skeleton->get_bone_name(0);
+        }
+    }
 
-    _root_bone_path = String(skel_path) + ":" + String(root_bone_name);
+    _root_bone_path = String(skel_path).is_empty()
+        ? String(root_bone_name)
+        : String(skel_path) + ":" + String(root_bone_name);
 
     past_delta_time = p_character->history_delta_time;
     future_delta_time = p_character->trajectory_delta_time;

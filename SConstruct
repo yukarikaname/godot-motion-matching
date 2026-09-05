@@ -43,7 +43,16 @@ Run the following command to download godot-cpp:
 
 env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
+# Embed libstdc++/libgcc so the extension uses the same std-lib ABI as the
+# Godot engine build (avoids a SIGSEGV from a newer g++ std::string ABI).
+env.Append(LINKFLAGS=["-static-libstdc++", "-static-libgcc"])
+
+
+
 env.Append(CPPPATH=["src/"])
+# Keep debug symbols so gdb/addr2line can resolve crash sites (godot-cpp may strip).
+env.Append(CCFLAGS=["-g"])
+env.Append(CXXFLAGS=["-g"])
 sources = Glob("src/*.cpp")
 sources += Glob("src/algo/*.cpp")
 sources += Glob("src/editor/*.cpp")

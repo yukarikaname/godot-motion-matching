@@ -52,6 +52,14 @@ void MMAnimationLibrary::bake_data(const MMCharacter* p_character, const Animati
                 const MMFeature* feature = Object::cast_to<MMFeature>(features[feature_index]);
                 const PackedFloat32Array feature_data = feature->bake_animation_pose(animation, time);
 
+                if (feature_data.size() != feature->get_dimension_count()) {
+                    print_line("[MM] bake mismatch feature_index=", feature_index,
+                        " data=", feature_data.size(),
+                        " dim=", feature->get_dimension_count(),
+                        " anim=", String(anim_name),
+                        " time=", String::num(time, 3));
+                }
+
                 ERR_FAIL_COND(feature_data.size() != feature->get_dimension_count());
 
                 // Update stats
@@ -63,7 +71,15 @@ void MMAnimationLibrary::bake_data(const MMCharacter* p_character, const Animati
                 current_pose_offset += feature->get_dimension_count();
             }
 
-            ERR_FAIL_COND(pose_data.size() != dim_count);
+            ERR_FAIL_COND_MSG(pose_data.size() != dim_count,
+                "[MM] bake aggregate mismatch pose=" + String::num(pose_data.size()) +
+                " dim_count=" + String::num(dim_count) +
+                " anim=" + String(anim_name));
+            if (pose_data.size() != dim_count) {
+                print_line("[MM] bake aggregate mismatch pose=", pose_data.size(),
+                    " dim_count=", dim_count, " anim=", String(anim_name),
+                    " time=", String::num(time, 3), " features=", features.size());
+            }
 
             // Update dataset
             data.append_array(pose_data);
@@ -97,6 +113,16 @@ void MMAnimationLibrary::bake_data(const MMCharacter* p_character, const Animati
         feature->set_std_devs(feature_std_devs);
         feature->set_mins(feature_mins);
         feature->set_maxes(feature_maxes);
+    }
+
+    // Guard against an inconsistent bake (empty / non-divisible data). Building a KDTree
+    // on empty data dereferences a null pointer, which terminates the process — abort
+    // cleanly here instead of crashing the engine.
+    if (data.is_empty() || dim_count <= 0 || (data.size() % dim_count != 0)) {
+        ERR_FAIL_COND_MSG(true, "MMAnimationLibrary::bake_data produced invalid data (size="
+            + String::num_int64(data.size()) + ", dim_count=" + String::num_int64(dim_count)
+            + "); check that each feature's dimension count matches what it bakes.");
+        return;
     }
 
     _normalize_data(data, dim_count);
@@ -344,6 +370,7 @@ MMQueryOutput MMAnimationLibrary::_search_kd_tree(const PackedFloat32Array& p_qu
 }
 
 void MMAnimationLibrary::_bind_methods() {
+    ClassDB::bind_method(D_METHOD("bake_data", "character", "player", "skeleton"), &MMAnimationLibrary::bake_data);
     BINDER_PROPERTY_PARAMS(MMAnimationLibrary, Variant::ARRAY, features, PROPERTY_HINT_TYPE_STRING, UtilityFunctions::str(Variant::OBJECT) + '/' + UtilityFunctions::str(Variant::BASIS) + ":MMFeature");
     BINDER_PROPERTY_PARAMS(MMAnimationLibrary, Variant::FLOAT, sampling_rate);
     BINDER_PROPERTY_PARAMS(MMAnimationLibrary, Variant::BOOL, include_cost_results);

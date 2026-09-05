@@ -31,6 +31,7 @@ protected:
 
 private:
     BoneState _sample_bone_state(Ref<Animation> p_animation, double p_time, const String& p_bone_path) const;
+    int32_t _pick_root_bone() const;
     StringName _skeleton_path;
     const Skeleton3D* _skeleton;
     int32_t _root_bone_index;

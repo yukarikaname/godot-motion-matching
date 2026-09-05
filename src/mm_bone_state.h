@@ -53,11 +53,21 @@ struct SkeletonState {
     }
 
     const BoneState& find_bone_state(const String& name) const {
-        return bone_states[(int32_t)bone_name_to_index.get(name, -1)];
+        const int32_t idx = (int32_t)bone_name_to_index.get(name, -1);
+        if (idx >= 0 && idx < (int32_t)bone_states.size()) {
+            return bone_states[idx];
+        }
+        static const BoneState empty;
+        return empty;
     }
 
     BoneState& find_bone_state(const String& name) {
-        return bone_states[(int32_t)bone_name_to_index.get(name, -1)];
+        const int32_t idx = (int32_t)bone_name_to_index.get(name, -1);
+        if (idx >= 0 && idx < (int32_t)bone_states.size()) {
+            return bone_states[idx];
+        }
+        static BoneState empty;
+        return empty;
     }
 
     void reset_velocities() {

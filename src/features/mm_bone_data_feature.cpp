@@ -11,9 +11,45 @@
 
 void MMBoneDataFeature::setup_skeleton(const MMCharacter* p_character, const AnimationMixer* p_player, const Skeleton3D* p_skeleton) {
     _skeleton = p_skeleton;
-    _skeleton_path = p_player->get_root_motion_track().get_concatenated_names();
-    const StringName root_bone_name = p_player->get_root_motion_track().get_concatenated_subnames();
-    _root_bone_index = p_skeleton->find_bone(root_bone_name);
+
+    // The plugin uses the AnimationMixer's root motion track to identify the root bone.
+    // If it isn't configured (empty / invalid NodePath), Godot throws "data is null"
+    // when we call get_concatenated_names()/subnames, and find_bone returns -1, which
+    // later crashes get_bone_global_rest(-1). Defend against both so the plugin works
+    // without requiring a root motion track.
+    NodePath root_track = p_player->get_root_motion_track();
+    bool has_root_track = !root_track.is_empty() && root_track != NodePath(".") && root_track != NodePath("..");
+    if (has_root_track) {
+        _skeleton_path = root_track.get_concatenated_names();
+        const StringName root_bone_name = root_track.get_concatenated_subnames();
+        _root_bone_index = p_skeleton->find_bone(root_bone_name);
+    } else {
+        // Fall back to the skeleton's own root (usually "Hips" or the first bone) so
+        // bake produces sensible global-space data even without a root motion track.
+        _skeleton_path = StringName();
+        _root_bone_index = _pick_root_bone();
+    }
+
+    if (_root_bone_index < 0) {
+        _root_bone_index = _pick_root_bone();
+    }
+    print_line("[MM] bone feature root_bone_index=", _root_bone_index, " path=", String(_skeleton_path));
+    ERR_FAIL_COND_MSG(_root_bone_index < 0, "MMBoneDataFeature: no usable root bone on skeleton");
+}
+
+// Choose a stable bone to treat as the "root" when no root motion track is set:
+// prefer "Hips", else the skeleton's actual root bone (first bone with no parent).
+int32_t MMBoneDataFeature::_pick_root_bone() const {
+    const int32_t hips = _skeleton->find_bone("Hips");
+    if (hips >= 0) {
+        return hips;
+    }
+    for (int32_t i = 0; i < _skeleton->get_bone_count(); ++i) {
+        if (_skeleton->get_bone_parent(i) < 0) {
+            return i;
+        }
+    }
+    return 0;
 }
 
 void MMBoneDataFeature::setup_for_animation(Ref<Animation> animation) {
@@ -84,13 +120,25 @@ void MMBoneDataFeature::_bind_methods() {
 
 BoneState MMBoneDataFeature::_sample_bone_state(Ref<Animation> p_animation, double p_time, const String& p_bone_path) const {
 
+    // Accept either a bare bone name ("Hips") or a full track path ("Skeleton:Hips").
+    // find_bone only understands the bare name.
+    const String bone_name = p_bone_path.contains(":") ? p_bone_path.get_slice(":", -1) : p_bone_path;
+
     std::vector<Transform3D> bone_transforms;
-    int32_t current_bone_index = _skeleton->find_bone(p_bone_path);
+    int32_t current_bone_index = _skeleton->find_bone(bone_name);
+    // If the configured bone isn't present (wrong rig), bail out to a valid pose rather
+    // than crashing on a -1 index.
+    if (current_bone_index < 0) {
+        current_bone_index = _root_bone_index;
+    }
     String current_bone;
     const int32_t root_bone_index = _root_bone_index;
     while (current_bone_index != root_bone_index && current_bone_index != -1) {
         current_bone = _skeleton->get_bone_name(current_bone_index);
-        const String bone_path = String(_skeleton_path) + String(":") + current_bone;
+        const String skel_path = String(_skeleton_path);
+        const String bone_path = skel_path.is_empty()
+            ? current_bone
+            : skel_path + String(":") + current_bone;
 
         Transform3D bone_transform = _skeleton->get_bone_rest(current_bone_index);
         int32_t pos_track = p_animation->find_track(bone_path, Animation::TrackType::TYPE_POSITION_3D);
@@ -124,7 +172,10 @@ BoneState MMBoneDataFeature::_sample_bone_state(Ref<Animation> p_animation, doub
 
     BoneState bone_state;
     bone_state.pos = global_transform.origin;
-    bone_state.rot = global_transform.basis.get_quaternion();
+    // get_quaternion() aborts on a non-orthonormal basis (we applied bone scale above),
+    // used to cast to Quaternion. get_rotation_quaternion() orthonormalizes first, so it
+    // is safe even when the skeleton has non-uniform scale.
+    bone_state.rot = global_transform.basis.get_rotation_quaternion();
     bone_state.scl = global_transform.basis.get_scale();
     return bone_state;
 }

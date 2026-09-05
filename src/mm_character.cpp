@@ -427,8 +427,25 @@ void MMCharacter::_notification(int p_what) {
         }
 
         if (skeleton && animation_tree) {
-            StringName root_node_path = animation_tree->get_root_motion_track().get_concatenated_subnames();
+            // Root motion track may be unset: guard so get_concatenated_subnames on an
+            // empty NodePath doesn't throw ("data is null"). Fall back to Hips / root bone.
+            NodePath root_track = animation_tree->get_root_motion_track();
+            StringName root_node_path;
+            if (!root_track.is_empty() && root_track != NodePath(".") && root_track != NodePath("..")) {
+                root_node_path = root_track.get_concatenated_subnames();
+            }
             _root_bone_idx = skeleton->find_bone(root_node_path);
+            if (_root_bone_idx < 0) {
+                _root_bone_idx = skeleton->find_bone("Hips");
+            }
+            if (_root_bone_idx < 0) {
+                for (int32_t i = 0; i < skeleton->get_bone_count(); ++i) {
+                    if (skeleton->get_bone_parent(i) < 0) {
+                        _root_bone_idx = i;
+                        break;
+                    }
+                }
+            }
 
             skeleton->set_as_top_level(true);
             skeleton->reset_bone_poses();
