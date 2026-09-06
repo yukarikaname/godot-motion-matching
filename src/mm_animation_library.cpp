@@ -6,6 +6,9 @@
 #include "math/stats.hpp"
 #include "mm_character.h"
 
+#include <godot_cpp/classes/project_settings.hpp>
+#include <godot_cpp/variant/typed_array.hpp>
+#include <limits>
 void MMAnimationLibrary::bake_data(const MMCharacter* p_character, const AnimationMixer* p_player, const Skeleton3D* p_skeleton) {
     ERR_FAIL_COND(features.is_empty());
 
@@ -148,7 +151,11 @@ MMQueryOutput MMAnimationLibrary::query(const MMQueryInput& p_query_input) {
     }
 
     MMQueryOutput result;
-    result = _search_kd_tree(query_vector);
+    if (lmm_enabled) {
+        result = _search_lmm(query_vector);
+    } else {
+        result = _search_kd_tree(query_vector);
+    }
     return std::move(result);
 }
 
@@ -388,6 +395,86 @@ MMQueryOutput MMAnimationLibrary::_search_kd_tree(const PackedFloat32Array& p_qu
     return result;
 }
 
+MMQueryOutput MMAnimationLibrary::_search_lmm(const PackedFloat32Array& p_query) {
+    MMQueryOutput empty;
+    const int dim = (int)p_query.size();
+    if (dim <= 0 || motion_data.size() == 0 || (motion_data.size() % dim) != 0) {
+        empty.matched_pose_index = -1;
+        return empty;
+    }
+    const int row_count = (int)(motion_data.size() / dim);
+
+    // Load the projector + decompressor nets once.
+    if (!_lmm_loaded) {
+        const String proj = lmm_projector_path;
+        const String deco = lmm_decompressor_path;
+        const String proj_base = proj.is_empty() ? "res://assets/mm/lmm/projector.bin" : proj;
+        const String deco_base = deco.is_empty() ? "res://assets/mm/lmm/decompressor.bin" : deco;
+        // fopen needs a filesystem path; globalize res:// -> absolute.
+        const String proj_fs = ProjectSettings::get_singleton()->globalize_path(proj_base);
+        const String deco_fs = ProjectSettings::get_singleton()->globalize_path(deco_base);
+        if (!_projector.load(proj_fs.utf8().get_data()) ||
+            !_decompressor.load(deco_fs.utf8().get_data())) {
+            ERR_PRINT("[MM] LMM failed to load projector/decompressor; falling back to KD-tree.");
+            empty.matched_pose_index = -1;
+            return empty;
+        }
+        _lmm_loaded = true;
+    }
+
+    const int dim_in = _projector.in_dim;
+    const int latent_dim = _projector.out_dim;
+    if (dim != dim_in) {
+        empty.matched_pose_index = -1;
+        return empty;
+    }
+
+    // query -> latent (projector)
+    std::vector<float> latent(latent_dim);
+    _projector.evaluate(p_query.ptr(), latent.data());
+
+    // latent -> decoded feature (decompressor)
+    if (_decompressor.in_dim != latent_dim) {
+        empty.matched_pose_index = -1;
+        return empty;
+    }
+    std::vector<float> decoded(dim);
+    _decompressor.evaluate(latent.data(), decoded.data());
+
+    // nearest motion_data row to the decoded feature -> pose index (metadata lookup only,
+    // cheap linear scan; avoids the KD-tree but is O(n). For a real LMM the decompressor
+    // output IS the pose, but we still need an animation+time to drive the mixer.)
+    int best = -1;
+    float best_d = std::numeric_limits<float>::max();
+    for (int r = 0; r < row_count; r++) {
+        const float* row = motion_data.ptr() + (size_t)r * dim;
+        float d = 0.0f;
+        for (int i = 0; i < dim; i++) {
+            float diff = row[i] - decoded[i];
+            d += diff * diff;
+        }
+        if (d < best_d) { best_d = d; best = r; }
+    }
+    if (best < 0 || best >= db_anim_index.size()) {
+        empty.matched_pose_index = best;
+        return empty;
+    }
+
+    MMQueryOutput result;
+    String library_name = get_path().get_file().get_basename() + "/";
+    if (library_name.is_empty()) {
+        library_name = get_name() + "/";
+    }
+    TypedArray<StringName> animation_list = get_animation_list();
+    result.matched_pose_index = best;
+    result.animation_match = library_name + UtilityFunctions::str(animation_list[db_anim_index[best]]);
+    result.time_match = db_time_index[best];
+    if (include_cost_results) {
+        result.matched_frame_data = motion_data.slice(best * dim, (best + 1) * dim);
+    }
+    return result;
+}
+
 void MMAnimationLibrary::_bind_methods() {
     ClassDB::bind_method(D_METHOD("bake_data", "character", "player", "skeleton"), &MMAnimationLibrary::bake_data);
     BINDER_PROPERTY_PARAMS(MMAnimationLibrary, Variant::ARRAY, features, PROPERTY_HINT_TYPE_STRING, UtilityFunctions::str(Variant::OBJECT) + '/' + UtilityFunctions::str(Variant::BASIS) + ":MMFeature");
@@ -399,4 +486,7 @@ void MMAnimationLibrary::_bind_methods() {
     BINDER_PROPERTY_PARAMS(MMAnimationLibrary, Variant::PACKED_FLOAT32_ARRAY, db_pose_offset, PROPERTY_HINT_NONE, "", DEBUG_PROPERTY_STORAGE_FLAG);
     BINDER_PROPERTY_PARAMS(MMAnimationLibrary, Variant::INT, schema_hash, PROPERTY_HINT_NONE, "", DEBUG_PROPERTY_STORAGE_FLAG);
     BINDER_PROPERTY_PARAMS(MMAnimationLibrary, Variant::PACKED_INT32_ARRAY, node_indices, PROPERTY_HINT_NONE, "", DEBUG_PROPERTY_STORAGE_FLAG);
+    BINDER_PROPERTY_PARAMS(MMAnimationLibrary, Variant::BOOL, lmm_enabled);
+    BINDER_PROPERTY_PARAMS(MMAnimationLibrary, Variant::STRING, lmm_decompressor_path);
+    BINDER_PROPERTY_PARAMS(MMAnimationLibrary, Variant::STRING, lmm_projector_path);
 }

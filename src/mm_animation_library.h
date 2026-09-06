@@ -3,6 +3,7 @@
 #include "algo/kd_tree.h"
 #include "common.h"
 #include "features/mm_feature.h"
+#include "lmm/nnet.h"
 #include "mm_query.h"
 
 #include <godot_cpp/classes/animation_library.hpp>
@@ -47,6 +48,14 @@ public:
     // KD Tree data
     GETSET(PackedInt32Array, node_indices);
 
+    // Learned Motion Matching (replaces the KD-tree search when enabled). Loads three
+    // small MLPs (projector -> decompressor) exported by train_lmm.py; GPU-agnostic and
+    // portable (pure CPU forward, trivial cost for a 54-dim net).
+    GETSET(bool, lmm_enabled, false)
+    GETSET(String, lmm_decompressor_path)
+    GETSET(String, lmm_projector_path)
+    GETSET(String, lmm_latent_mean_path)
+
 protected:
     static void _bind_methods();
 
@@ -56,6 +65,10 @@ private:
 
     MMQueryOutput _search_naive(const PackedFloat32Array& p_query) const;
     MMQueryOutput _search_kd_tree(const PackedFloat32Array& p_query);
+    MMQueryOutput _search_lmm(const PackedFloat32Array& p_query);
 
     std::unique_ptr<KDTree> _kd_tree;
+    MMNN _projector;
+    MMNN _decompressor;
+    bool _lmm_loaded = false;
 };
