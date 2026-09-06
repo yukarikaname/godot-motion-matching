@@ -172,9 +172,14 @@ BoneState MMBoneDataFeature::_sample_bone_state(Ref<Animation> p_animation, doub
 
     BoneState bone_state;
     bone_state.pos = global_transform.origin;
-    // get_quaternion() aborts on a non-orthonormal basis (we applied bone scale above),
-    // used to cast to Quaternion. get_rotation_quaternion() orthonormalizes first, so it
-    // is safe even when the skeleton has non-uniform scale.
+    // get_quaternion() aborts on a non-orthonormal basis. get_rotation_quaternion()
+    // orthonormalizes first (safe for uniform/non-uniform scale), but a NaN basis
+    // (incompatible track) still aborts, so bail to a neutral pose instead.
+    if (!global_transform.basis.is_finite()) {
+        bone_state.rot = Quaternion();
+        bone_state.scl = Vector3(1.0f, 1.0f, 1.0f);
+        return bone_state;
+    }
     bone_state.rot = global_transform.basis.get_rotation_quaternion();
     bone_state.scl = global_transform.basis.get_scale();
     return bone_state;

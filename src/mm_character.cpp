@@ -275,10 +275,15 @@ void MMCharacter::_update_query() {
 void MMCharacter::_apply_root_motion() {
     // The GLB skeleton has non-uniform scale helper bones (q_*, _shadow/_dummy cancel
     // bones); after root motion the node's Basis can become non-orthonormal (NaN in the
-    // worst case). Node3D::get_quaternion() asserts on a non-rotation Basis and returns
-    // Quaternion(), which then NaNs the pose and crashes. Orthonormalise the Basis
-    // before extracting the quaternion.
-    const Quaternion skeleton_rot = skeleton->get_global_transform().basis.orthonormalized().get_rotation_quaternion();
+    // The skeleton's global basis may be NaN (incompatible animation track on the
+    // mismatched rig); orthonormalized() keeps NaN and get_rotation_quaternion() then
+    // aborts (is_rotation() false -> ERR_FAIL in Basis::get_quaternion). Bail before
+    // touching it so we never feed a NaN basis into the engine.
+    const Transform3D skel_global = skeleton->get_global_transform();
+    if (!skel_global.basis.is_finite()) {
+        return;
+    }
+    const Quaternion skeleton_rot = skel_global.basis.orthonormalized().get_rotation_quaternion();
 
     const Quaternion root_rot = animation_tree->get_root_motion_rotation();
     const Vector3 root_pos = animation_tree->get_root_motion_position();
@@ -313,6 +318,15 @@ void MMCharacter::_fill_current_skeleton_state(SkeletonState& p_state) const {
         Transform3D bone_pose = skeleton->get_bone_global_pose(b);
         p_state[b].pos = bone_pose.origin;
         p_state[b].vel = Vector3();
+        // A NaN basis (from an incompatible animation track on a mismatched rig) makes
+        // both get_rotation_quaternion() and get_scale() assert+fail (the basis is NaN,
+        // orthonormalized() stays NaN, is_rotation() is false -> ERR_FAIL abort). Guard:
+        // keep a neutral pose for that bone instead of reading a broken basis.
+        if (!bone_pose.basis.is_finite()) {
+            p_state[b].rot = Quaternion();
+            p_state[b].scl = Vector3(1.0f, 1.0f, 1.0f);
+            continue;
+        }
         p_state[b].rot = bone_pose.basis.get_rotation_quaternion();
         p_state[b].ang_vel = Vector3();
         p_state[b].scl = bone_pose.basis.get_scale();
