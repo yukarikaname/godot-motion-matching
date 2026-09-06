@@ -35,7 +35,16 @@ void MMTrajectoryFeature::setup_skeleton(const MMCharacter* p_character, const A
         root_bone_name = root_track.get_concatenated_subnames();
         _root_bone = p_skeleton->find_bone(root_bone_name);
     } else {
-        skel_path = StringName();
+        // The MM clips target tracks as "<skeleton>:<bone>"; use "%<skeletonname>" when the
+        // skeleton is a unique-name node so _root_bone_path matches the clip tracks and the
+        // trajectory bake isn't constant (rest pose).
+        if (p_skeleton->is_unique_name_in_owner()) {
+            skel_path = StringName("%") + p_skeleton->get_name();
+        } else if (p_skeleton->is_inside_tree()) {
+            skel_path = StringName(p_skeleton->get_path());
+        } else {
+            skel_path = StringName();
+        }
         _root_bone = p_skeleton->find_bone("Hips");
         if (_root_bone < 0) {
             for (int32_t i = 0; i < p_skeleton->get_bone_count(); ++i) {

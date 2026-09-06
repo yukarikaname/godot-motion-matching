@@ -26,7 +26,17 @@ void MMBoneDataFeature::setup_skeleton(const MMCharacter* p_character, const Ani
     } else {
         // Fall back to the skeleton's own root (usually "Hips" or the first bone) so
         // bake produces sensible global-space data even without a root motion track.
-        _skeleton_path = StringName();
+        // The MM clips target tracks as "<skeleton>:<bone>". The skeleton is owned by the
+        // scene as a unique-name node (%GeneralSkeleton), so use "%<skeletonname>". Without
+        // it, find_track("Bone") never matches "%GeneralSkeleton:Bone" and every baked
+        // pose collapses to the (constant) rest pose.
+        if (p_skeleton->is_unique_name_in_owner()) {
+            _skeleton_path = StringName("%") + p_skeleton->get_name();
+        } else if (p_skeleton->is_inside_tree()) {
+            _skeleton_path = StringName(p_skeleton->get_path());
+        } else {
+            _skeleton_path = StringName();
+        }
         _root_bone_index = _pick_root_bone();
     }
 
