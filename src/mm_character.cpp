@@ -464,7 +464,12 @@ void MMCharacter::_notification(int p_what) {
                 }
             }
 
-            skeleton->set_as_top_level(true);
+            // Keep the skeleton parented under this body (NOT top_level): the visual is
+            // a child of MMCharacter (see MMBootstrap), so the mesh must follow the body's
+            // transform. Setting top_level left the skeleton/mesh at the origin while the
+            // CharacterBody3D walked away -> the character seemed to disappear on WASD.
+            // MM still poses the skeleton's bones; it just also rides along with the body.
+            skeleton->set_as_top_level(false);
             skeleton->reset_bone_poses();
 
             _skeleton_state = SkeletonState(skeleton);
