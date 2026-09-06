@@ -273,11 +273,16 @@ void MMCharacter::_update_query() {
 }
 
 void MMCharacter::_apply_root_motion() {
-    skeleton->set_quaternion(
-        skeleton->get_quaternion() * animation_tree->get_root_motion_rotation());
+    // The GLB skeleton has non-uniform scale helper bones (q_*, _shadow/_dummy cancel
+    // bones); after root motion the node's Basis can become non-orthonormal (NaN in the
+    // worst case). Node3D::get_quaternion() asserts on a non-rotation Basis and returns
+    // Quaternion(), which then NaNs the pose and crashes. Orthonormalise the Basis
+    // before extracting the quaternion.
+    const Quaternion skeleton_rot = skeleton->get_global_transform().basis.orthonormalized().get_rotation_quaternion();
+    skeleton->set_quaternion(skeleton_rot * animation_tree->get_root_motion_rotation());
 
     const Vector3 movement_delta = (animation_tree->get_root_motion_rotation_accumulator().inverse() *
-                                    skeleton->get_quaternion())
+                                    skeleton_rot)
                                        .xform(animation_tree->get_root_motion_position());
 
     skeleton->set_global_position(skeleton->get_global_position() + movement_delta);
