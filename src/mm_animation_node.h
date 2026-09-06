@@ -4,12 +4,17 @@
 #include "common.h"
 #include "mm_animation_library.h"
 
-#include <godot_cpp/classes/animation_node_extension.hpp>
+#include <godot_cpp/classes/animation_root_node.hpp>
 
 #include <queue>
 
-class MMAnimationNode : public AnimationNodeExtension {
-    GDCLASS(MMAnimationNode, AnimationNodeExtension);
+// Godot 4.7 requires the AnimationTree root to be an AnimationRootNode. The plugin
+// previously derived from AnimationNodeExtension (a plain AnimationNode), which the
+// engine silently rejects as tree_root -> tree_root stays null -> no clip ever plays
+// -> the skeleton is never posed by Motion Matching. Switch to AnimationRootNode and
+// drive the matching from AnimationNode::_process (its shared per-frame hook).
+class MMAnimationNode : public AnimationRootNode {
+    GDCLASS(MMAnimationNode, AnimationRootNode);
 
 public:
     GETSET(StringName, library);
@@ -23,7 +28,8 @@ public:
 
     void set_blending_enabled(bool value);
 
-    virtual PackedFloat32Array _process_animation_node(const PackedFloat64Array& p_playback_info, bool p_test_only);
+    // Engine drives us as the AnimationTree root each frame. Return the blend time.
+    virtual double _process(double p_time, bool p_seek, bool p_is_external_seeking, bool p_test_only) override;
     virtual Array _get_parameter_list() const override;
     virtual Variant _get_parameter_default_value(const StringName& p_parameter) const override;
     virtual bool _is_parameter_read_only(const StringName& p_parameter) const override;
@@ -52,13 +58,15 @@ private:
     AnimationInfo _current_animation_info;
 
     void _start_transition(const StringName p_animation, float p_time);
-    PackedFloat32Array _update_current_animation(bool p_test_only);
+    double _update_current_animation(bool p_test_only);
 
     MMQueryOutput _last_query_output;
     float _time_since_last_query{0.f};
 
     Vector3 _prev_requested_velocity;
     float _prev_facing;
+
+    double _last_process_time{-1.0};
 };
 
 #endif // MM_ANIMATION_NODE_H

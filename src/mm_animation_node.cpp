@@ -13,34 +13,34 @@
 // is QUERY_TIME_ERROR away from the current time
 constexpr float QUERY_TIME_ERROR = 0.05;
 
-PackedFloat32Array MMAnimationNode::_process_animation_node(const PackedFloat64Array& p_playback_info, bool p_test_only) {
-    PackedFloat32Array default_result;
-    default_result.resize(6);
-    default_result.fill(0.0);
+double MMAnimationNode::_process(double p_time, bool p_seek, bool p_is_external_seeking, bool p_test_only) {
     if (Engine::get_singleton()->is_editor_hint()) {
-        return default_result;
+        return 0.0;
     }
 
     if (library.is_empty()) {
-        return default_result;
+        return 0.0;
     }
-    const double time = p_playback_info[0];
-    const double delta_time = p_playback_info[1];
+    const double time = p_time;
+    const double delta_time = _last_process_time < 0.0 ? (1.0 / 60.0) : (p_time - _last_process_time);
+    _last_process_time = p_time;
     _current_animation_info.time = time;
     _current_animation_info.delta = delta_time;
-    _current_animation_info.seeked = p_playback_info[4] > 0.5;
-    _current_animation_info.is_external_seeking = p_playback_info[5] > 0.5;
+    _current_animation_info.seeked = p_seek;
+    _current_animation_info.is_external_seeking = p_is_external_seeking;
 
     const bool has_ended = _current_animation_info.time >= _current_animation_info.length;
 
     const MMQueryInput* query_input = Object::cast_to<MMQueryInput>(get_parameter("motion_matching_input"));
 
     // We run queries periodically, or when the animation is about to end
-    const bool has_current_animation = !_last_query_output.animation_match.is_empty();
-    const bool should_force_query = _should_force_query(query_input, delta_time);
+    bool has_current_animation = !_last_query_output.animation_match.is_empty();
+    const bool should_force_query = query_input ? _should_force_query(query_input, delta_time) : false;
 
-    _prev_requested_velocity = query_input->target_velocity;
-    _prev_facing = query_input->controller_transform.get_basis().get_euler().y;
+    if (query_input) {
+        _prev_requested_velocity = query_input->target_velocity;
+        _prev_facing = query_input->controller_transform.get_basis().get_euler().y;
+    }
 
     const bool should_query =
         (_time_since_last_query > (1.0 / query_frequency)) ||
@@ -63,10 +63,10 @@ PackedFloat32Array MMAnimationNode::_process_animation_node(const PackedFloat64A
     // Run query
     AnimationTree* animation_tree = Object::cast_to<AnimationTree>(ObjectDB::get_instance(get_processing_animation_tree_instance_id()));
     Ref<MMAnimationLibrary> animation_library = animation_tree->get_animation_library(library);
-    ERR_FAIL_COND_V_MSG(animation_library.is_null(), PackedFloat32Array(), "Library not found: " + library);
+    ERR_FAIL_COND_V_MSG(animation_library.is_null(), 0.0, "Library not found: " + library);
     ERR_FAIL_COND_V_MSG(
         animation_library->db_anim_index.is_empty() || animation_library->db_time_index.is_empty(),
-        PackedFloat32Array(),
+        0.0,
         "Library not baked: " + library);
     const MMQueryOutput query_output = animation_library->query(*query_input);
 
@@ -103,9 +103,10 @@ void MMAnimationNode::_start_transition(const StringName p_animation, float p_ti
     _current_animation_info.weight = blending_enabled ? 0.f : 1.f;
 }
 
-PackedFloat32Array MMAnimationNode::_update_current_animation(bool p_test_only) {
+double MMAnimationNode::_update_current_animation(bool p_test_only) {
     const bool will_end =
         _current_animation_info.time + _current_animation_info.delta >= _current_animation_info.length;
+    (void)will_end;
 
     Spring::_simple_spring_damper_exact(
         _current_animation_info.weight,
@@ -142,7 +143,10 @@ PackedFloat32Array MMAnimationNode::_update_current_animation(bool p_test_only) 
         prev_info.weight *= inv_blend / prev_blend_total;
     }
 
-    if (!p_test_only) {
+    // Don't blend an (as-yet unset) animation: calling blend_animation with an empty
+    // name drives make_animation_instance into a null animation and spams the error.
+    // The first successful query (below/downstream) sets _current_animation_info.name.
+    if (!p_test_only && !_current_animation_info.name.is_empty()) {
         for (AnimationInfo& prev_info : _prev_animation_queue) {
             blend_animation(
                 prev_info.name,
@@ -161,14 +165,8 @@ PackedFloat32Array MMAnimationNode::_update_current_animation(bool p_test_only) 
             _current_animation_info.weight);
     }
 
-    PackedFloat32Array result;
-    result.append(0.0);
-    result.append(_current_animation_info.time);
-    result.append(_current_animation_info.delta);
-    result.append(static_cast<float>(Animation::LoopMode::LOOP_NONE));
-    result.append(will_end);
-    result.append(false); // Is Infinity
-    return result;
+    // Advance the current animation's time by delta and return the new blend time.
+    return _current_animation_info.time;
 }
 
 Array MMAnimationNode::_get_parameter_list() const {
@@ -179,7 +177,7 @@ Array MMAnimationNode::_get_parameter_list() const {
 }
 
 Variant MMAnimationNode::_get_parameter_default_value(const StringName& p_parameter) const {
-    Variant ret = AnimationNodeExtension::_get_parameter_default_value(p_parameter);
+    Variant ret = AnimationNode::_get_parameter_default_value(p_parameter);
     if (ret != Variant()) {
         return ret;
     }
@@ -194,7 +192,7 @@ Variant MMAnimationNode::_get_parameter_default_value(const StringName& p_parame
 }
 
 bool MMAnimationNode::_is_parameter_read_only(const StringName& p_parameter) const {
-    if (AnimationNodeExtension::_is_parameter_read_only(p_parameter)) {
+    if (AnimationNode::_is_parameter_read_only(p_parameter)) {
         return true;
     }
 
@@ -249,7 +247,7 @@ void MMAnimationNode::_validate_property(PropertyInfo& p_property) const {
         p_property.hint_string = animations;
     }
 
-    AnimationNodeExtension::_validate_property(p_property);
+    AnimationNode::_validate_property(p_property);
 }
 
 void MMAnimationNode::_bind_methods() {
