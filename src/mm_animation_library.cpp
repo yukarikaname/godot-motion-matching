@@ -423,27 +423,17 @@ MMQueryOutput MMAnimationLibrary::_search_lmm(const PackedFloat32Array& p_query)
     }
 
     const int dim_in = _projector.in_dim;
-    const int latent_dim = _projector.out_dim;
-    if (dim != dim_in) {
+    const int dim_out = _projector.out_dim;
+    if (dim != dim_in || dim_out != dim) {
         empty.matched_pose_index = -1;
         return empty;
     }
 
-    // query -> latent (projector)
-    std::vector<float> latent(latent_dim);
-    _projector.evaluate(p_query.ptr(), latent.data());
-
-    // latent -> decoded feature (decompressor)
-    if (_decompressor.in_dim != latent_dim) {
-        empty.matched_pose_index = -1;
-        return empty;
-    }
+    // query -> feature (projector maps a query into DB feature space; output == dim).
     std::vector<float> decoded(dim);
-    _decompressor.evaluate(latent.data(), decoded.data());
+    _projector.evaluate(p_query.ptr(), decoded.data());
 
-    // nearest motion_data row to the decoded feature -> pose index (metadata lookup only,
-    // cheap linear scan; avoids the KD-tree but is O(n). For a real LMM the decompressor
-    // output IS the pose, but we still need an animation+time to drive the mixer.)
+    // nearest motion_data row to the projected feature -> pose index.
     int best = -1;
     float best_d = std::numeric_limits<float>::max();
     for (int r = 0; r < row_count; r++) {
