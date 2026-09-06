@@ -279,11 +279,23 @@ void MMCharacter::_apply_root_motion() {
     // Quaternion(), which then NaNs the pose and crashes. Orthonormalise the Basis
     // before extracting the quaternion.
     const Quaternion skeleton_rot = skeleton->get_global_transform().basis.orthonormalized().get_rotation_quaternion();
-    skeleton->set_quaternion(skeleton_rot * animation_tree->get_root_motion_rotation());
+
+    const Quaternion root_rot = animation_tree->get_root_motion_rotation();
+    const Vector3 root_pos = animation_tree->get_root_motion_position();
+
+    // A NaN/invalid root-motion rotation (e.g. a clip without a well-formed root track,
+    // mismatched rig) poisons skeleton_rot * root_rot into NaN, which NaNs the skeleton
+    // and makes the mesh vanish (and can re-trigger Basis::get_quaternion() errors).
+    // Guard: if the root rotation isn't a valid finite quaternion, skip root motion.
+    if (!root_rot.is_finite() || !root_pos.is_finite()) {
+        return;
+    }
+
+    skeleton->set_quaternion(skeleton_rot * root_rot);
 
     const Vector3 movement_delta = (animation_tree->get_root_motion_rotation_accumulator().inverse() *
                                     skeleton_rot)
-                                       .xform(animation_tree->get_root_motion_position());
+                                       .xform(root_pos);
 
     skeleton->set_global_position(skeleton->get_global_position() + movement_delta);
 }
