@@ -337,11 +337,30 @@ MMQueryOutput MMAnimationLibrary::_search_kd_tree(const PackedFloat32Array& p_qu
         }
     }
 
+    // Guard against a feature/query dimension mismatch: _search_nn_recursive reads
+    // dimension_weigths[i] for i in [0, dim), so a shorter vector OOBs and the abort
+    // pops out of Godot's error handler (seen as 'MMAnimationLibrary::_search_kd_tree'
+    // abort). Bail to a safe index instead of searching with a broken weight vector.
+    const int32_t dim_count = (int32_t)p_query.size();
+    if (dim_count != (int32_t)dimension_weights.size() || dim_count <= 0) {
+        MMQueryOutput result;
+        result.matched_pose_index = -1;
+        return result;
+    }
+
     int nodes_visited = 0;
     int best_pose_index = _kd_tree->search_nn(
         motion_data.ptr(),
         p_query.ptr(),
         dimension_weights);
+
+    // search_nn can return -1 (empty/invalid tree); guard before indexing the DB so a
+    // bad index aborts Godot instead of returning a poison pose.
+    if (best_pose_index < 0 || best_pose_index >= db_anim_index.size()) {
+        MMQueryOutput result;
+        result.matched_pose_index = best_pose_index;
+        return result;
+    }
 
     MMQueryOutput result;
     String library_name = get_path().get_file().get_basename() + "/";
