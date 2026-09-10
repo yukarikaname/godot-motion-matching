@@ -423,17 +423,19 @@ MMQueryOutput MMAnimationLibrary::_search_lmm(const PackedFloat32Array& p_query)
     }
 
     const int dim_in = _projector.in_dim;
-    const int dim_out = _projector.out_dim;
-    if (dim != dim_in || dim_out != dim) {
+    const int latent_dim = _projector.out_dim;
+    if (dim != dim_in || _decompressor.in_dim != latent_dim || _decompressor.out_dim != dim) {
         empty.matched_pose_index = -1;
         return empty;
     }
 
-    // query -> feature (projector maps a query into DB feature space; output == dim).
+    // query -> latent (projector), latent -> feature (decompressor).
+    std::vector<float> latent(latent_dim);
+    _projector.evaluate(p_query.ptr(), latent.data());
     std::vector<float> decoded(dim);
-    _projector.evaluate(p_query.ptr(), decoded.data());
+    _decompressor.evaluate(latent.data(), decoded.data());
 
-    // nearest motion_data row to the projected feature -> pose index.
+    // nearest motion_data row to the decoded feature -> pose index.
     int best = -1;
     float best_d = std::numeric_limits<float>::max();
     for (int r = 0; r < row_count; r++) {
